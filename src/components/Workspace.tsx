@@ -434,9 +434,6 @@ export const Workspace: React.FC<WorkspaceProps> = ({ groupId }) => {
                 </div>
                 <div className="text-xs sm:text-sm font-black flex items-center gap-1.5">
                   <span>{formatArabicDateFull(activeDate)}</span>
-                  <span className="font-mono-num text-[11px] px-1.5 py-0.5 rounded bg-white/85 border border-slate-200">
-                    {activeDate}
-                  </span>
                 </div>
               </div>
             </button>

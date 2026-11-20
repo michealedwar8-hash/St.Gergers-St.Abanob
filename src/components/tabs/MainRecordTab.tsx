@@ -193,8 +193,7 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
             التاريخ النشط:{' '}
             <span className="font-extrabold text-indigo-700">
               {formatArabicDateFull(activeDate)}
-            </span>{' '}
-            <span className="font-mono-num text-[11px] text-indigo-600">({activeDate})</span>
+            </span>
             {' — '}
             <span className="text-emerald-700 font-extrabold tabular-nums">
               الحضور: {presentOnActiveDateCount} / {members.length}

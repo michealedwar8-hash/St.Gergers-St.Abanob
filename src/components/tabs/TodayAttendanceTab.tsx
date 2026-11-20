@@ -89,8 +89,7 @@ export const TodayAttendanceTab: React.FC<TodayAttendanceTabProps> = ({
                 حضور اليوم الفعلي (مباشر)
               </h3>
               <p className="text-base font-bold text-emerald-700 mt-0.5">
-                {formatArabicDateFull(todayUTC)}{' '}
-                <span className="font-mono-num text-sm text-slate-500">({todayUTC})</span>
+                {formatArabicDateFull(todayUTC)}
               </p>
             </div>
           </div>

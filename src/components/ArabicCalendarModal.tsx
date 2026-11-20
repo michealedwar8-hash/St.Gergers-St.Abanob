@@ -4,6 +4,7 @@ import {
   ARABIC_MONTHS,
   ARABIC_WEEKDAYS_SHORT,
   formatArabicDateFull,
+  formatArabicDateShort,
 } from '../utils/helpers';
 
 interface ArabicCalendarModalProps {
@@ -322,7 +323,7 @@ export const ArabicCalendarModal: React.FC<ArabicCalendarModalProps> = ({
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>اليوم ({todayUTC})</span>
+            <span>اليوم: {formatArabicDateShort(todayUTC)}</span>
           </button>
         </div>
       </div>

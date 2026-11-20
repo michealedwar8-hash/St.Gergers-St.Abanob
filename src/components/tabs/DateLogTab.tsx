@@ -130,8 +130,7 @@ export const DateLogTab: React.FC<DateLogTabProps> = ({
                 اضغط لاختيار أي تاريخ من التقويم
               </div>
               <div className="text-base font-black">
-                {formatArabicDateFull(selectedDate)}{' '}
-                <span className="font-mono-num text-sm">({selectedDate})</span>
+                {formatArabicDateFull(selectedDate)}
               </div>
             </div>
           </button>
@@ -165,7 +164,7 @@ export const DateLogTab: React.FC<DateLogTabProps> = ({
       <div className="hidden print:block text-center mb-4">
         <h2 className="text-2xl font-black">{groupConfig.workspaceTitle}</h2>
         <p className="text-base font-bold">
-          كشف الحضور بتاريخ: {formatArabicDateFull(selectedDate)} ({selectedDate}) — العدد:{' '}
+          كشف الحضور بتاريخ: {formatArabicDateFull(selectedDate)} — العدد:{' '}
           {dayRows.length}
         </p>
       </div>
