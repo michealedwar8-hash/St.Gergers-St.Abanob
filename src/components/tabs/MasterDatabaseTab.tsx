@@ -119,13 +119,18 @@ export const MasterDatabaseTab: React.FC<MasterDatabaseTabProps> = ({
   const handleRestoreJSON = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      addToast('حجم ملف النسخة الاحتياطية يتجاوز الحد الأقصى المسموح به (5 ميجابايت)', 'error');
+      e.target.value = '';
+      return;
+    }
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as { data?: GroupData } & Partial<GroupData>;
       const targetData: GroupData | null =
-        parsed.data && Array.isArray(parsed.data.members)
+        parsed && typeof parsed === 'object' && parsed.data && Array.isArray(parsed.data.members)
           ? parsed.data
-          : Array.isArray(parsed.members)
+          : parsed && typeof parsed === 'object' && Array.isArray(parsed.members)
           ? { members: parsed.members, logs: Array.isArray(parsed.logs) ? parsed.logs : [] }
           : null;
 

@@ -1,17 +1,23 @@
 import React, { useState } from 'react';
-import { UserPlus, X } from 'lucide-react';
+import { Check, UserPlus, X } from 'lucide-react';
 import { Member } from '../types';
+import { PhoneActions } from './PhoneActions';
 
 interface AddMemberModalProps {
   isOpen: boolean;
   groupTitle: string;
-  onAdd: (member: Omit<Member, 'id'>) => void;
+  activeDate: string;
+  onAdd: (
+    member: Omit<Member, 'id'>,
+    options?: { markPresentOnDate?: string }
+  ) => void;
   onClose: () => void;
 }
 
 export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   isOpen,
   groupTitle,
+  activeDate,
   onAdd,
   onClose,
 }) => {
@@ -20,6 +26,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   const [birthDate, setBirthDate] = useState('');
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
+  const [markPresentNow, setMarkPresentNow] = useState(false);
   const [error, setError] = useState('');
 
   if (!isOpen) return null;
@@ -30,18 +37,23 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
       setError('يرجى إدخال اسم المخدوم');
       return;
     }
-    onAdd({
-      name: name.trim(),
-      phone: phone.trim(),
-      birthDate: birthDate.trim(),
-      address: address.trim(),
-      notes: notes.trim(),
-    });
+    onAdd(
+      {
+        name: name.trim(),
+        phone: phone.trim(),
+        birthDate: birthDate.trim(),
+        address: address.trim(),
+        notes: notes.trim(),
+        visitationNotes: '',
+      },
+      markPresentNow ? { markPresentOnDate: activeDate } : undefined
+    );
     setName('');
     setPhone('');
     setBirthDate('');
     setAddress('');
     setNotes('');
+    setMarkPresentNow(false);
     setError('');
     onClose();
   };
@@ -112,6 +124,11 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
                 placeholder="01xxxxxxxxx"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-500 text-sm font-bold font-mono-num text-right text-slate-900 bg-slate-50 focus:bg-white transition-colors"
               />
+              {phone.trim().length > 0 && (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <PhoneActions phone={phone} notes={notes} showText />
+                </div>
+              )}
             </div>
 
             <div>
@@ -152,6 +169,32 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
               className="w-full px-3.5 py-2 rounded-xl border border-slate-300 focus:border-indigo-500 text-sm font-bold text-slate-900 bg-slate-50 focus:bg-white transition-colors resize-none"
             />
           </div>
+
+          {/* Optional immediate attendance registration */}
+          <button
+            type="button"
+            onClick={() => setMarkPresentNow((v) => !v)}
+            aria-pressed={markPresentNow}
+            className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border-2 text-right transition-colors cursor-pointer ${
+              markPresentNow
+                ? 'bg-emerald-50 border-emerald-500 text-emerald-950'
+                : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-emerald-300'
+            }`}
+          >
+            <span
+              className={`w-6 h-6 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors ${
+                markPresentNow
+                  ? 'bg-emerald-600 border-emerald-700 text-white'
+                  : 'bg-white border-slate-300 text-transparent'
+              }`}
+            >
+              <Check className="w-4 h-4 stroke-[3]" />
+            </span>
+            <span className="text-xs sm:text-sm font-extrabold">
+              تسجيل حضور المخدوم تلقائياً بتاريخ{' '}
+              <span className="font-mono-num text-emerald-700">({activeDate})</span>
+            </span>
+          </button>
 
           <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-slate-200">
             <button

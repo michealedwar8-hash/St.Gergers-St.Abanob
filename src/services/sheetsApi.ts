@@ -1,18 +1,52 @@
 import { AllGroupsData, GroupData, GroupId, LogType, Member } from '../types';
-import { normalizeDateKey } from '../utils/helpers';
+import { sanitizeLog, sanitizeMember } from '../utils/helpers';
 
 const PLACEHOLDER_SHEETS_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
+const REQUEST_TIMEOUT_MS = 20000;
 
 export const DEFAULT_SHEETS_API_URL =
   'https://script.google.com/macros/s/AKfycbwB9057uy3gORpSzM5zRb9JaRxRBWXVpW8JslE1qE6f76vjiUYR_tMrv_xuvdRK4J0D/exec';
 
+const ALLOWED_SHEETS_HOSTS = new Set([
+  'script.google.com',
+  'script.googleusercontent.com',
+]);
+
+/**
+ * Strictly validates that the API URL uses HTTPS and points only to official Google Apps Script endpoints.
+ * Prevents HTTP downgrade attacks and unauthorized data exfiltration to third-party domains.
+ */
 export function isValidSheetsUrl(url: string): boolean {
   const trimmed = (url || '').trim();
-  return (
-    trimmed.length > 0 &&
-    trimmed !== PLACEHOLDER_SHEETS_URL &&
-    (trimmed.startsWith('https://') || trimmed.startsWith('http://'))
-  );
+  if (!trimmed || trimmed === PLACEHOLDER_SHEETS_URL) return false;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return false;
+    if (!ALLOWED_SHEETS_HOSTS.has(parsed.hostname.toLowerCase())) return false;
+    return parsed.pathname.length > 1;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      redirect: 'follow',
+      credentials: 'omit',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 interface ApiResponse<T = unknown> {
@@ -34,7 +68,7 @@ async function postToSheets(
   }
 
   // MANDATORY CORS-safe header for Google Apps Script (no application/json preflight)
-  const response = await fetch(apiUrl.trim(), {
+  const response = await fetchWithTimeout(apiUrl.trim(), {
     method: 'POST',
     headers: {
       'Content-Type': 'text/plain;charset=utf-8',
@@ -68,9 +102,11 @@ export async function fetchAllDataFromSheets(
 ): Promise<Partial<AllGroupsData> | null> {
   if (!isValidSheetsUrl(apiUrl)) return null;
   const separator = apiUrl.includes('?') ? '&' : '?';
-  const response = await fetch(`${apiUrl.trim()}${separator}action=getAllData`, {
-    method: 'GET',
-  });
+  // Cache-busting timestamp guarantees AI Studio and GitHub Pages always fetch live fresh data
+  const response = await fetchWithTimeout(
+    `${apiUrl.trim()}${separator}action=getAllData&_t=${Date.now()}`,
+    { method: 'GET' }
+  );
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
@@ -87,27 +123,23 @@ export async function fetchAllDataFromSheets(
   for (const gid of groupIds) {
     const grp = source[gid];
     if (grp && (Array.isArray(grp.members) || Array.isArray(grp.logs))) {
+      const safeMembers: Member[] = [];
+      if (Array.isArray(grp.members)) {
+        for (const rawM of grp.members) {
+          const clean = sanitizeMember(rawM);
+          if (clean) safeMembers.push(clean);
+        }
+      }
+      const safeLogs: GroupData['logs'] = [];
+      if (Array.isArray(grp.logs)) {
+        for (const rawL of grp.logs) {
+          const clean = sanitizeLog(rawL);
+          if (clean) safeLogs.push(clean);
+        }
+      }
       result[gid] = {
-        members: Array.isArray(grp.members)
-          ? grp.members.map((m) => ({
-              id: String(m.id ?? ''),
-              name: String(m.name ?? ''),
-              phone: String(m.phone ?? ''),
-              birthDate: m.birthDate ? normalizeDateKey(String(m.birthDate)) : '',
-              address: String(m.address ?? ''),
-              notes: String(m.notes ?? ''),
-              visitationNotes: String(m.visitationNotes ?? ''),
-            }))
-          : [],
-        logs: Array.isArray(grp.logs)
-          ? grp.logs.map((l) => ({
-              id: String(l.id ?? ''),
-              memberId: String(l.memberId ?? ''),
-              date: normalizeDateKey(String(l.date ?? '')),
-              timestampUTC: String(l.timestampUTC ?? ''),
-              type: l.type as LogType,
-            }))
-          : [],
+        members: safeMembers,
+        logs: safeLogs,
       };
     }
   }
@@ -120,8 +152,8 @@ export async function fetchGroupDataFromSheets(
 ): Promise<GroupData | null> {
   if (!isValidSheetsUrl(apiUrl)) return null;
   const separator = apiUrl.includes('?') ? '&' : '?';
-  const response = await fetch(
-    `${apiUrl.trim()}${separator}action=getGroupData&groupId=${encodeURIComponent(groupId)}`,
+  const response = await fetchWithTimeout(
+    `${apiUrl.trim()}${separator}action=getGroupData&groupId=${encodeURIComponent(groupId)}&_t=${Date.now()}`,
     { method: 'GET' }
   );
   if (!response.ok) {
@@ -133,9 +165,15 @@ export async function fetchGroupDataFromSheets(
   }
   const payload = (json.data ?? json) as Partial<GroupData>;
   if (!payload) return null;
+  const safeMembers = Array.isArray(payload.members)
+    ? payload.members.map(sanitizeMember).filter((m): m is Member => m !== null)
+    : [];
+  const safeLogs = Array.isArray(payload.logs)
+    ? payload.logs.map(sanitizeLog).filter((l): l is GroupData['logs'][number] => l !== null)
+    : [];
   return {
-    members: Array.isArray(payload.members) ? payload.members : [],
-    logs: Array.isArray(payload.logs) ? payload.logs : [],
+    members: safeMembers,
+    logs: safeLogs,
   };
 }
 

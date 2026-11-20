@@ -122,9 +122,6 @@ export const HomeScreen: React.FC = () => {
               <h1 className="text-xl sm:text-2xl lg:text-3xl font-black leading-tight">
                 أسرة مدارس الأحد إعدادي وثانوي
               </h1>
-              <p className="text-xs sm:text-sm text-indigo-100 font-semibold">
-                اختر السجل المطلوب لتسجيل الحضور ومتابعة الـ ٥ عناصر الروحية والافتقاد وأعياد الميلاد.
-              </p>
             </div>
 
             <div className="flex items-center gap-2.5 shrink-0">
@@ -190,32 +187,24 @@ export const HomeScreen: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Sleek Balanced Portrait Showcase (fits cleanly on mobile/tablet/desktop) */}
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <div className="relative rounded-xl overflow-hidden bg-gradient-to-b from-slate-900/35 to-slate-900/60 border border-white/50 shadow-sm h-28 sm:h-36 flex items-center justify-center">
+                    {/* Clean Floating Transparent Cutout Showcase (Zero Background Boxes) */}
+                    <div className="grid grid-cols-2 gap-2 items-end pt-1">
+                      <div className="relative h-36 sm:h-44 flex items-end justify-center">
                         <img
                           src={group.saintImage}
                           alt={group.saintAlt}
-                          className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                          className="max-h-full max-w-full object-contain drop-shadow-[0_6px_12px_rgba(15,23,42,0.42)] group-hover:scale-105 transition-transform duration-300"
                         />
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/85 to-transparent px-2 py-1">
-                          <span className="text-[11px] font-extrabold text-white">
-                            {group.familyName}
-                          </span>
-                        </div>
                       </div>
 
-                      <div className="relative rounded-xl overflow-hidden bg-white/15 border border-white/50 shadow-sm h-28 sm:h-36">
+                      <div className="relative h-36 sm:h-44 flex items-end justify-center">
                         <img
                           src={group.groupImage}
                           alt={group.groupAlt}
-                          className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                          className="max-h-full max-w-full object-contain drop-shadow-[0_6px_12px_rgba(15,23,42,0.42)] group-hover:scale-105 transition-transform duration-300"
                         />
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/85 to-transparent px-2 py-1">
-                          <span className="text-[11px] font-extrabold text-white">
-                            {group.stageLabel}
-                          </span>
-                        </div>
                       </div>
                     </div>
                   </div>

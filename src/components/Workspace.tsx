@@ -114,6 +114,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({ groupId }) => {
     return ids.size;
   }, [logs, todayUTC]);
 
+  const totalAllMembers = useMemo(() => {
+    return (
+      groupsData.hs_boys.members.length +
+      groupsData.hs_girls.members.length +
+      groupsData.ms_boys.members.length +
+      groupsData.ms_girls.members.length
+    );
+  }, [groupsData]);
+
   const todaysBirthdayCount = useMemo(() => {
     let count = 0;
     for (const m of members) {
@@ -239,20 +248,22 @@ export const Workspace: React.FC<WorkspaceProps> = ({ groupId }) => {
               <span>القائمة الرئيسية</span>
             </button>
 
-            {/* Dual Visual Identity: Saint + Matching Youth/Girls */}
-            <div className="flex items-center gap-1.5 shrink-0">
-              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl overflow-hidden border-2 border-white/75 bg-slate-900/35 shadow-sm shrink-0 flex items-center justify-center">
+            {/* Dual Visual Identity: Transparent Saint + Matching Youth/Girls Cutouts */}
+            <div className="flex items-end gap-1.5 shrink-0">
+              <div className="h-12 w-12 sm:h-14 sm:w-14 flex items-end justify-center shrink-0">
                 <img
                   src={groupConfig.saintImage}
                   alt={groupConfig.saintAlt}
-                  className="w-full h-full object-contain"
+                  referrerPolicy="no-referrer"
+                  className="max-h-full max-w-full object-contain drop-shadow-[0_3px_6px_rgba(15,23,42,0.45)]"
                 />
               </div>
-              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl overflow-hidden border-2 border-white/75 bg-white/15 shadow-sm shrink-0">
+              <div className="h-12 w-16 sm:h-14 sm:w-20 flex items-end justify-center shrink-0">
                 <img
                   src={groupConfig.groupImage}
                   alt={groupConfig.groupAlt}
-                  className="w-full h-full object-cover object-top"
+                  referrerPolicy="no-referrer"
+                  className="max-h-full max-w-full object-contain drop-shadow-[0_3px_6px_rgba(15,23,42,0.45)]"
                 />
               </div>
             </div>
@@ -262,7 +273,9 @@ export const Workspace: React.FC<WorkspaceProps> = ({ groupId }) => {
                 {groupConfig.workspaceTitle}
               </h1>
               <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[11px] sm:text-xs font-bold text-white/90">
-                <span className="tabular-nums">المخدومون: {members.length}</span>
+                <span className="tabular-nums">مخدومو الأسرة: {members.length}</span>
+                <span>•</span>
+                <span className="tabular-nums">الإجمالي الكلي: {totalAllMembers}</span>
                 <span>•</span>
                 <span className="tabular-nums">حضور اليوم: {presentTodayCount}</span>
                 {isSheetsConfigured && saveState === 'saving' && (
@@ -488,6 +501,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ groupId }) => {
             searchQuery={searchQuery}
             highlightedMemberId={highlightedMemberId}
             jumpCounter={jumpCounter}
+            onMemberAdded={handleSelectMemberFromDropdown}
           />
         )}
         {activeTab === 'visitation' && (

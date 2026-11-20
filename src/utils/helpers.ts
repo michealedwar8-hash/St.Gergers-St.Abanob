@@ -78,26 +78,30 @@ export function toWesternDigits(str: string): string {
 export function normalizeDateKey(raw: string): string {
   const trimmed = toWesternDigits((raw || '').trim());
   if (!trimmed) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  if (/^\d{4,}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+
+  // Preserve exact calendar date from ISO timestamps (e.g. "2026-11-19T00:00:00.000Z") without timezone shifting
+  const isoPrefix = trimmed.match(/^(\d{4,}-\d{2}-\d{2})(?:[T\s].*)?$/);
+  if (isoPrefix) return isoPrefix[1];
 
   // Handle YYYY/MM/DD
-  const ymdSlash = trimmed.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})$/);
+  const ymdSlash = trimmed.match(/^(\d{4,})[/.-](\d{1,2})[/.-](\d{1,2})$/);
   if (ymdSlash) {
     return `${ymdSlash[1]}-${ymdSlash[2].padStart(2, '0')}-${ymdSlash[3].padStart(2, '0')}`;
   }
 
   // Handle DD/MM/YYYY
-  const dmySlash = trimmed.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+  const dmySlash = trimmed.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4,})$/);
   if (dmySlash) {
     return `${dmySlash[3]}-${dmySlash[2].padStart(2, '0')}-${dmySlash[1].padStart(2, '0')}`;
   }
 
   const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) {
-    const match = trimmed.match(/\d{4}-\d{2}-\d{2}/);
+    const match = trimmed.match(/\d{4,}-\d{2}-\d{2}/);
     return match ? match[0] : trimmed.slice(0, 10);
   }
-  const y = parsed.getFullYear();
+  const y = String(parsed.getFullYear()).padStart(4, '0');
   const m = String(parsed.getMonth() + 1).padStart(2, '0');
   const d = String(parsed.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
@@ -153,7 +157,7 @@ export function daysBetweenUTC(earlierDateStr: string, laterDateStr: string): nu
  * Formats a YYYY-MM-DD date nicely in Arabic, e.g., "الأحد، 19 نوفمبر 2026".
  */
 export function formatArabicDateFull(dateStr: string): string {
-  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
+  if (!dateStr || !/^\d{4,}-\d{2}-\d{2}$/.test(dateStr)) return '';
   const d = parseUTCDate(dateStr);
   const weekday = ARABIC_WEEKDAYS_FULL[d.getUTCDay()];
   const day = d.getUTCDate();
@@ -166,7 +170,7 @@ export function formatArabicDateFull(dateStr: string): string {
  * Formats a YYYY-MM-DD date compactly in Arabic, e.g., "19 نوفمبر 2026".
  */
 export function formatArabicDateShort(dateStr: string): string {
-  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
+  if (!dateStr || !/^\d{4,}-\d{2}-\d{2}$/.test(dateStr)) return '';
   const d = parseUTCDate(dateStr);
   const day = d.getUTCDate();
   const month = ARABIC_MONTHS[d.getUTCMonth()];
@@ -239,22 +243,26 @@ export function getTotalAttendanceCount(memberId: string, logs: LogEntry[]): num
 }
 
 /**
- * Calculates regularity status for one of the 5 spiritual elements relative to today's live date:
- * - regular (منتظم — Green): logged within the last 7 days (0..7 days ago, including first-time check today!).
+ * Calculates regularity status for one of the 5 spiritual elements relative to a reference date (defaults to activeDate/today):
+ * - Considers logs up to and including referenceDate so switching dates in the calendar reflects the exact status on that date.
+ * - regular (منتظم — Green): logged within the last 7 days (0..7 days ago, including first-time check on that day!).
  * - intermittent (متقطع — Amber): more than 1 week (> 7 days) and less than 2 weeks (< 14 days) since last logged.
- * - irregular (غير منتظم — Red): 2 weeks or more (>= 14 days) since last logged, OR never logged.
+ * - irregular (غير منتظم — Red): 2 weeks or more (>= 14 days) since last logged, OR never logged up to referenceDate.
  */
 export function calculateElementRegularity(
   memberId: string,
   element: SpiritualElement,
   logs: LogEntry[],
-  todayUTC: string = getTodayUTC()
+  referenceDate: string = getTodayUTC()
 ): { status: RegularityStatus; lastDate: string; countLast7: number; countLast14: number } {
+  const normalizedRef = normalizeDateKey(referenceDate) || getTodayUTC();
   const uniqueDates = new Set<string>();
   for (const log of logs) {
     if (log.memberId === memberId && log.type === element) {
       const normalized = normalizeDateKey(log.date);
-      if (normalized) uniqueDates.add(normalized);
+      if (normalized && daysBetweenUTC(normalized, normalizedRef) >= 0) {
+        uniqueDates.add(normalized);
+      }
     }
   }
 
@@ -262,14 +270,16 @@ export function calculateElementRegularity(
     return { status: 'irregular', lastDate: '', countLast7: 0, countLast14: 0 };
   }
 
-  const sortedDates = Array.from(uniqueDates).sort((a, b) => (a > b ? -1 : 1));
+  const sortedDates = Array.from(uniqueDates).sort((a, b) =>
+    daysBetweenUTC(a, b) > 0 ? 1 : -1
+  );
   const lastDate = sortedDates[0];
 
   let countLast7 = 0;
   let countLast14 = 0;
 
   for (const d of sortedDates) {
-    const diff = daysBetweenUTC(d, todayUTC);
+    const diff = daysBetweenUTC(d, normalizedRef);
     if (diff >= 0 && diff <= 7) {
       countLast7++;
     }
@@ -278,7 +288,7 @@ export function calculateElementRegularity(
     }
   }
 
-  const daysSinceLast = Math.max(0, daysBetweenUTC(lastDate, todayUTC));
+  const daysSinceLast = Math.max(0, daysBetweenUTC(lastDate, normalizedRef));
 
   if (daysSinceLast <= 7) {
     return { status: 'regular', lastDate, countLast7, countLast14 };
@@ -448,15 +458,101 @@ export function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+const VALID_LOG_TYPES = new Set<LogType>([
+  'attendance',
+  'church',
+  'confession',
+  'communion',
+  'bible',
+  'prayer',
+  'visitation',
+]);
+
 /**
- * Export rows to native Excel (.xlsx) with RTL sheet layout.
+ * Strips invisible control characters and enforces a safe max length on text inputs.
+ */
+export function sanitizeText(value: unknown, maxLength = 400): string {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .slice(0, maxLength);
+}
+
+/**
+ * Prevents CSV / Excel Formula Injection (OWASP CWE-1236) while keeping valid phone numbers (+20...) intact.
+ */
+export function sanitizeSpreadsheetCell(value: string | number | undefined | null): string | number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const s = sanitizeText(value, 1000);
+  if (!s) return '';
+  const trimmedStart = s.trimStart();
+  if (/^[=@\t\r]/.test(trimmedStart)) {
+    return `'${s}`;
+  }
+  if (/^[+-]/.test(trimmedStart) && !/^\+?\d[\d\s-]{5,}$/.test(trimmedStart)) {
+    return `'${s}`;
+  }
+  return s;
+}
+
+/**
+ * Safely validates and sanitizes an untrusted Member object (from localStorage, JSON backup, or remote API).
+ */
+export function sanitizeMember(raw: unknown): Member | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = raw as Record<string, unknown>;
+  const id = sanitizeText(rec.id, 120).trim();
+  const name = sanitizeText(rec.name, 200).trim();
+  if (!id || !name) return null;
+  const rawBirth = sanitizeText(rec.birthDate, 40).trim();
+  return {
+    id,
+    name,
+    phone: toWesternDigits(sanitizeText(rec.phone, 40)).trim(),
+    birthDate: rawBirth ? normalizeDateKey(rawBirth) : '',
+    address: sanitizeText(rec.address, 300).trim(),
+    notes: sanitizeText(rec.notes, 600).trim(),
+    visitationNotes: sanitizeText(rec.visitationNotes, 800).trim(),
+  };
+}
+
+/**
+ * Safely validates and sanitizes an untrusted LogEntry object.
+ */
+export function sanitizeLog(raw: unknown): LogEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = raw as Record<string, unknown>;
+  const id = sanitizeText(rec.id, 120).trim();
+  const memberId = sanitizeText(rec.memberId, 120).trim();
+  const date = normalizeDateKey(sanitizeText(rec.date, 40));
+  const type = sanitizeText(rec.type, 32).trim() as LogType;
+  if (!id || !memberId || !date || !VALID_LOG_TYPES.has(type)) return null;
+  const rawTs = sanitizeText(rec.timestampUTC, 60).trim();
+  return {
+    id,
+    memberId,
+    date,
+    timestampUTC: rawTs || new Date().toISOString(),
+    type,
+  };
+}
+
+/**
+ * Export rows to native Excel (.xlsx) with RTL sheet layout and Formula Injection protection.
  */
 export function exportRowsToExcel(
   rows: Record<string, string | number>[],
   sheetName: string,
   filename: string
 ) {
-  const ws = XLSX.utils.json_to_sheet(rows);
+  const safeRows = rows.map((row) => {
+    const clean: Record<string, string | number> = {};
+    for (const [k, v] of Object.entries(row)) {
+      clean[k] = sanitizeSpreadsheetCell(v);
+    }
+    return clean;
+  });
+  const ws = XLSX.utils.json_to_sheet(safeRows);
   ws['!views'] = [{ rightToLeft: true }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
@@ -468,13 +564,13 @@ export function exportRowsToExcel(
 }
 
 /**
- * Export rows to UTF-8 BOM CSV (Excel Arabic compatible).
+ * Export rows to UTF-8 BOM CSV (Excel Arabic compatible) with Formula Injection protection.
  */
 export function exportRowsToCSV(rows: Record<string, string | number>[], filename: string) {
   if (rows.length === 0) return;
   const headers = Object.keys(rows[0]);
   const escapeCell = (val: string | number | undefined | null) => {
-    const s = String(val ?? '');
+    const s = String(sanitizeSpreadsheetCell(val));
     if (s.includes(',') || s.includes('"') || s.includes('\n')) {
       return `"${s.replace(/"/g, '""')}"`;
     }
@@ -500,30 +596,39 @@ export function exportJSONBackup(data: unknown, filename: string) {
   downloadBlob(blob, filename.endsWith('.json') ? filename : `${filename}.json`);
 }
 
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB safety limit
+const MAX_IMPORT_ROWS = 5000;
+
 /**
- * Parse an uploaded Excel (.xlsx/.xls) or CSV file into Member input rows.
+ * Parse an uploaded Excel (.xlsx/.xls) or CSV file into sanitized Member input rows.
  */
 export async function parseMembersFromSpreadsheet(
   file: File
 ): Promise<Omit<Member, 'id'>[]> {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new Error('حجم الملف يتجاوز الحد الأقصى المسموح به (5 ميجابايت)');
+  }
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: 'array' });
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) return [];
 
   const sheet = workbook.Sheets[firstSheetName];
-  const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-    defval: '',
-    raw: false,
-  });
+  const jsonRows = XLSX.utils
+    .sheet_to_json<Record<string, unknown>>(sheet, {
+      defval: '',
+      raw: false,
+    })
+    .slice(0, MAX_IMPORT_ROWS);
 
   const findField = (row: Record<string, unknown>, candidates: string[]): string => {
     const entries = Object.entries(row);
     for (const [k, v] of entries) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
       const nk = normalizeArabic(k);
       for (const c of candidates) {
         if (nk === normalizeArabic(c) || nk.includes(normalizeArabic(c))) {
-          return String(v ?? '').trim();
+          return sanitizeText(v, 400).trim();
         }
       }
     }
@@ -532,24 +637,17 @@ export async function parseMembersFromSpreadsheet(
 
   const results: Omit<Member, 'id'>[] = [];
   for (const row of jsonRows) {
-    const name = findField(row, ['الاسم', 'الإسم', 'اسم', 'name', 'full name']);
+    const name = findField(row, ['الاسم', 'الإسم', 'اسم', 'name', 'full name']).slice(0, 200);
     if (!name) continue;
-    const phone = findField(row, ['رقم التليفون', 'التليفون', 'التلفون', 'موبايل', 'هاتف', 'phone', 'mobile']);
-    let birthDate = findField(row, ['تاريخ الميلاد', 'الميلاد', 'birthdate', 'birth date', 'dob']);
-    const address = findField(row, ['العنوان', 'عنوان', 'السكن', 'address']);
-    const notes = findField(row, ['ملاحظات', 'ملاحظة', 'notes', 'note']);
+    const phone = toWesternDigits(
+      findField(row, ['رقم التليفون', 'التليفون', 'التلفون', 'موبايل', 'هاتف', 'phone', 'mobile'])
+    ).slice(0, 40);
+    const rawBirth = findField(row, ['تاريخ الميلاد', 'الميلاد', 'birthdate', 'birth date', 'dob']);
+    const birthDate = rawBirth ? normalizeDateKey(rawBirth) : '';
+    const address = findField(row, ['العنوان', 'عنوان', 'السكن', 'address']).slice(0, 300);
+    const notes = findField(row, ['ملاحظات', 'ملاحظة', 'notes', 'note']).slice(0, 600);
 
-    // Normalize simple date formats if needed
-    if (birthDate && !/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
-      const parsed = new Date(birthDate);
-      if (!Number.isNaN(parsed.getTime())) {
-        birthDate = parsed.toISOString().slice(0, 10);
-      } else {
-        birthDate = '';
-      }
-    }
-
-    results.push({ name, phone, birthDate, address, notes });
+    results.push({ name, phone, birthDate, address, notes, visitationNotes: '' });
   }
   return results;
 }

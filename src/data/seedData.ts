@@ -1,12 +1,13 @@
 import { AllGroupsData, GroupConfig, GroupId, LogType, Member, SpiritualElement } from '../types';
-import hsBoysYouthImg from '../assets/images/hs_boys_youth_1795126800578.jpg';
-import hsGirlsYouthImg from '../assets/images/hs_girls_youth_1795126801870.jpg';
-import msBoysYouthImg from '../assets/images/ms_boys_youth_1795126800396.jpg';
-import msGirlsYouthImg from '../assets/images/ms_girls_youth_1795126799463.jpg';
+import stGeorgeImg from '../assets/images/st_george_nobg.png';
+import stAbanoubImg from '../assets/images/st_abanoub_nobg.png';
+import hsBoysYouthImg from '../assets/images/hs_boys_nobg.png';
+import hsGirlsYouthImg from '../assets/images/hs_girls_nobg.png';
+import msBoysYouthImg from '../assets/images/ms_boys_nobg.png';
+import msGirlsYouthImg from '../assets/images/ms_girls_nobg.png';
 
-const BASE_URL = import.meta.env.BASE_URL || './';
-const ST_GEORGE_IMAGE = `${BASE_URL}assets/aistudio/image_f6a53e42.png`;
-const ST_ABANOUB_IMAGE = `${BASE_URL}assets/aistudio/image_8b22e6be.png`;
+const ST_GEORGE_IMAGE = stGeorgeImg;
+const ST_ABANOUB_IMAGE = stAbanoubImg;
 
 export const GROUPS_CONFIG: GroupConfig[] = [
   {

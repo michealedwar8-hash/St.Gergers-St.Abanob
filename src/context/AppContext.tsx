@@ -18,7 +18,15 @@ import {
   ToastMessage,
 } from '../types';
 import { createInitialSeedData, LOG_TYPE_META } from '../data/seedData';
-import { generateId, getTodayUTC, normalizeArabic, normalizeDateKey } from '../utils/helpers';
+import {
+  generateId,
+  getTodayUTC,
+  normalizeArabic,
+  normalizeDateKey,
+  sanitizeLog,
+  sanitizeMember,
+  toWesternDigits,
+} from '../utils/helpers';
 import {
   DEFAULT_SHEETS_API_URL,
   fetchAllDataFromSheets,
@@ -31,8 +39,42 @@ import {
 } from '../services/sheetsApi';
 
 const STORAGE_DATA_KEY = 'sunday_school_attendance_data_v1';
+const STORAGE_DELETED_KEY = 'sunday_school_deleted_members_v1';
 const STORAGE_FONT_KEY = 'sunday_school_font_scale_v1';
 const STORAGE_SHEETS_URL_KEY = 'sunday_school_sheets_api_url_v1';
+
+type DeletedMembersMap = Record<GroupId, string[]>;
+
+const EMPTY_DELETED_MAP: DeletedMembersMap = {
+  hs_boys: [],
+  hs_girls: [],
+  ms_boys: [],
+  ms_girls: [],
+};
+
+function loadDeletedMembers(): DeletedMembersMap {
+  try {
+    const raw = localStorage.getItem(STORAGE_DELETED_KEY);
+    if (!raw) return { ...EMPTY_DELETED_MAP };
+    const parsed = JSON.parse(raw) as Partial<DeletedMembersMap>;
+    return {
+      hs_boys: Array.isArray(parsed.hs_boys) ? parsed.hs_boys.map(String) : [],
+      hs_girls: Array.isArray(parsed.hs_girls) ? parsed.hs_girls.map(String) : [],
+      ms_boys: Array.isArray(parsed.ms_boys) ? parsed.ms_boys.map(String) : [],
+      ms_girls: Array.isArray(parsed.ms_girls) ? parsed.ms_girls.map(String) : [],
+    };
+  } catch {
+    return { ...EMPTY_DELETED_MAP };
+  }
+}
+
+function saveDeletedMembers(map: DeletedMembersMap) {
+  try {
+    localStorage.setItem(STORAGE_DELETED_KEY, JSON.stringify(map));
+  } catch {
+    // ignore storage quota errors
+  }
+}
 
 const FONT_SCALE_VALUES: Record<FontScale, string> = {
   normal: '0.88',
@@ -65,7 +107,11 @@ interface AppContextValue {
   removeToast: (id: string) => void;
   toggleLog: (groupId: GroupId, memberId: string, date: string, type: LogType) => void;
   toggleVisitation: (groupId: GroupId, memberId: string) => void;
-  addMember: (groupId: GroupId, memberInput: Omit<Member, 'id'>) => void;
+  addMember: (
+    groupId: GroupId,
+    memberInput: Omit<Member, 'id'>,
+    options?: { markPresentOnDate?: string }
+  ) => Member;
   updateMemberField: (
     groupId: GroupId,
     memberId: string,
@@ -84,23 +130,45 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 function loadInitialData(): AllGroupsData {
   const seed = createInitialSeedData();
+  const deleted = loadDeletedMembers();
+  const groupIds: GroupId[] = ['hs_boys', 'hs_girls', 'ms_boys', 'ms_girls'];
+
+  const filterDeleted = (gid: GroupId, data: GroupData): GroupData => {
+    const delSet = new Set(deleted[gid] || []);
+    if (delSet.size === 0) return data;
+    return {
+      members: data.members.filter((m) => !delSet.has(m.id)),
+      logs: data.logs.filter((l) => !delSet.has(l.memberId)),
+    };
+  };
+
   try {
     const raw = localStorage.getItem(STORAGE_DATA_KEY);
-    if (!raw) return seed;
+    if (!raw) {
+      const cleanedSeed: AllGroupsData = { ...seed };
+      for (const gid of groupIds) {
+        cleanedSeed[gid] = filterDeleted(gid, seed[gid]);
+      }
+      return cleanedSeed;
+    }
     const parsed = JSON.parse(raw) as Partial<AllGroupsData>;
-    const groupIds: GroupId[] = ['hs_boys', 'hs_girls', 'ms_boys', 'ms_girls'];
     const merged: AllGroupsData = { ...seed };
     for (const gid of groupIds) {
-      if (parsed[gid] && Array.isArray(parsed[gid]!.members)) {
-        merged[gid] = {
-          members: parsed[gid]!.members,
-          logs: Array.isArray(parsed[gid]!.logs)
-            ? parsed[gid]!.logs.map((l) => ({
-                ...l,
-                date: normalizeDateKey(l.date),
-              }))
-            : [],
-        };
+      if (parsed && parsed[gid] && Array.isArray(parsed[gid]!.members)) {
+        const cleanMembers = parsed[gid]!.members
+          .map(sanitizeMember)
+          .filter((m): m is Member => m !== null);
+        const cleanLogs = Array.isArray(parsed[gid]!.logs)
+          ? parsed[gid]!.logs
+              .map(sanitizeLog)
+              .filter((l): l is LogEntry => l !== null)
+          : [];
+        merged[gid] = filterDeleted(gid, {
+          members: cleanMembers,
+          logs: cleanLogs,
+        });
+      } else {
+        merged[gid] = filterDeleted(gid, seed[gid]);
       }
     }
     return merged;
@@ -148,6 +216,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const saveResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const groupsDataRef = useRef<AllGroupsData>(groupsData);
   groupsDataRef.current = groupsData;
+  const deletedMembersRef = useRef<DeletedMembersMap>(loadDeletedMembers());
+  const writeQueueRef = useRef<Record<GroupId, Promise<unknown>>>({
+    hs_boys: Promise.resolve(),
+    hs_girls: Promise.resolve(),
+    ms_boys: Promise.resolve(),
+    ms_girls: Promise.resolve(),
+  });
+  const pendingWritesCountRef = useRef<number>(0);
+
+  const enqueueGroupWrite = useCallback(
+    <T,>(groupId: GroupId, task: () => Promise<T>): Promise<T> => {
+      pendingWritesCountRef.current += 1;
+      const runTask = async () => {
+        try {
+          return await task();
+        } finally {
+          pendingWritesCountRef.current = Math.max(0, pendingWritesCountRef.current - 1);
+        }
+      };
+      const next = writeQueueRef.current[groupId].then(runTask, runTask);
+      writeQueueRef.current[groupId] = next.catch(() => undefined);
+      return next;
+    },
+    []
+  );
 
   const isSheetsConfigured = isValidSheetsUrl(sheetsApiUrl);
 
@@ -249,31 +342,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const remote = await fetchAllDataFromSheets(sheetsApiUrl);
         setIsSheetsOnline(true);
         if (remote) {
+          const ghostDeletions: Array<{ gid: GroupId; memberId: string }> = [];
           setGroupsData((prev) => {
             const next = { ...prev };
             const groupIds: GroupId[] = ['hs_boys', 'hs_girls', 'ms_boys', 'ms_girls'];
             for (const gid of groupIds) {
               const r = remote[gid];
-              if (r && (r.members.length > 0 || r.logs.length > 0)) {
+              const delSet = new Set(deletedMembersRef.current[gid] || []);
+              if (r && (r.members.length > 0 || r.logs.length > 0 || delSet.size > 0)) {
                 const prevVisNotes = new Map<string, string>();
                 for (const pm of prev[gid].members) {
                   if (pm.visitationNotes) prevVisNotes.set(pm.id, pm.visitationNotes);
                 }
+
+                // Detect any tombstone-deleted member still lingering in Sheets and queue permanent purge
+                for (const rm of r.members) {
+                  if (delSet.has(rm.id)) {
+                    ghostDeletions.push({ gid, memberId: rm.id });
+                  }
+                }
+
+                const filteredRemoteMembers = r.members
+                  .filter((rm) => !delSet.has(rm.id))
+                  .map((rm) => ({
+                    ...rm,
+                    visitationNotes:
+                      rm.visitationNotes || prevVisNotes.get(rm.id) || '',
+                  }));
+
+                const filteredRemoteLogs = r.logs.filter((rl) => !delSet.has(rl.memberId));
+
+                // If Sheets has members (or user deleted members intentionally), apply remote cleanly
+                const useRemoteMembers =
+                  r.members.length > 0 || delSet.size > 0
+                    ? filteredRemoteMembers
+                    : prev[gid].members.filter((m) => !delSet.has(m.id));
+
                 next[gid] = {
-                  members:
-                    r.members.length > 0
-                      ? r.members.map((rm) => ({
-                          ...rm,
-                          visitationNotes:
-                            rm.visitationNotes || prevVisNotes.get(rm.id) || '',
-                        }))
-                      : prev[gid].members,
-                  logs: r.logs,
+                  members: useRemoteMembers,
+                  logs: filteredRemoteLogs,
                 };
               }
             }
+            groupsDataRef.current = next;
             return next;
           });
+
+          // Silently finish purging any ghost rows in Google Sheets
+          for (const g of ghostDeletions) {
+            void enqueueGroupWrite(g.gid, () =>
+              syncDeleteMember(sheetsApiUrl, g.gid, g.memberId)
+            ).catch(() => undefined);
+          }
         }
         if (!silent) {
           addToast('تم تحديث البيانات من Google Sheets بنجاح', 'success');
@@ -292,16 +412,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsRefreshing(false);
       }
     },
-    [sheetsApiUrl, addToast]
+    [sheetsApiUrl, addToast, enqueueGroupWrite]
   );
 
-  // Initial silent sync on mount if configured
+  // Automatic real-time bidirectional sync (AI Studio <-> GitHub Hosting <-> All Devices)
+  // Syncs on mount, on tab focus/visibility, and every 20s while visible — never colliding with active local writes
   useEffect(() => {
-    if (isValidSheetsUrl(sheetsApiUrl)) {
+    if (!isValidSheetsUrl(sheetsApiUrl)) return;
+
+    const tryAutoSync = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (pendingWritesCountRef.current > 0) return;
+      if (Object.keys(debounceTimersRef.current).length > 0) return;
       void refreshAllFromSheets(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    };
+
+    // Initial immediate sync on mount
+    void refreshAllFromSheets(true);
+
+    const pollInterval = setInterval(tryAutoSync, 20000);
+    const onFocus = () => tryAutoSync();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tryAutoSync();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [sheetsApiUrl, refreshAllFromSheets]);
 
   // Auto-reset activeDate back to today's actual UTC date when entering or leaving a group
   const openGroup = useCallback((groupId: GroupId) => {
@@ -367,7 +508,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         type,
       };
 
-      // Optimistic state update
+      // Synchronously update ref + state so rapid clicks never race
+      const updatedLogs = checked
+        ? [newEntry, ...previousLogs]
+        : previousLogs.filter(
+            (l) =>
+              !(
+                l.memberId === memberId &&
+                normalizeDateKey(l.date) === targetDate &&
+                l.type === type
+              )
+          );
+      groupsDataRef.current = {
+        ...groupsDataRef.current,
+        [groupId]: { ...currentGroup, logs: updatedLogs },
+      };
+
       setGroupsData((prev) => {
         const g = prev[groupId];
         const nextLogs = checked
@@ -397,39 +553,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         addToast(
           checked
-            ? `تم تسجيل "${label}" للمخدوم ${memberName}`
-            : `تم إلغاء "${label}" للمخدوم ${memberName}`,
+            ? `تم تسجيل "${label}" للمخدوم ${memberName} بتاريخ ${targetDate}`
+            : `تم إلغاء "${label}" للمخدوم ${memberName} ليوم ${targetDate}`,
           checked ? 'success' : 'info'
         );
       }
 
       if (isValidSheetsUrl(sheetsApiUrl)) {
         setSaveState('saving');
-        void syncToggleLog(sheetsApiUrl, {
-          groupId,
-          memberId,
-          date: targetDate,
-          type,
-          checked,
-          timestampUTC,
-          id: entryId,
-        })
+        void enqueueGroupWrite(groupId, () =>
+          syncToggleLog(sheetsApiUrl, {
+            groupId,
+            memberId,
+            date: targetDate,
+            type,
+            checked,
+            timestampUTC,
+            id: entryId,
+          })
+        )
           .then(() => {
             setIsSheetsOnline(true);
             markSaveDone('saved');
           })
           .catch(() => {
-            // Revert optimistic update on API error
-            setGroupsData((prev) => ({
-              ...prev,
-              [groupId]: { ...prev[groupId], logs: previousLogs },
-            }));
+            // Revert only this specific toggle entry on API error (never clobber other logs)
+            setGroupsData((prev) => {
+              const g = prev[groupId];
+              const revertedLogs = checked
+                ? g.logs.filter((l) => l.id !== entryId)
+                : existing
+                ? [existing, ...g.logs]
+                : g.logs;
+              const nextAll = { ...prev, [groupId]: { ...g, logs: revertedLogs } };
+              groupsDataRef.current = nextAll;
+              return nextAll;
+            });
             markSaveDone('error');
             addToast('فشل الحفظ في Google Sheets — تم التراجع عن التغيير', 'error');
           });
       }
     },
-    [sheetsApiUrl, addToast, markSaveDone]
+    [sheetsApiUrl, addToast, markSaveDone, enqueueGroupWrite]
   );
 
   // Toggle "تم الافتقاد" (visited) status for a member's current absence cycle, synced to Google Sheets
@@ -467,6 +632,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (isCurrentlyVisited) {
         const removeIds = new Set(activeVisitLogs.map((l) => l.id));
+        const nextLogs = previousLogs.filter((l) => !removeIds.has(l.id));
+        groupsDataRef.current = {
+          ...groupsDataRef.current,
+          [groupId]: { ...currentGroup, logs: nextLogs },
+        };
         setGroupsData((prev) => ({
           ...prev,
           [groupId]: {
@@ -478,18 +648,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (isValidSheetsUrl(sheetsApiUrl)) {
           setSaveState('saving');
-          Promise.all(
-            activeVisitLogs.map((l) => syncDeleteLog(sheetsApiUrl, groupId, l.id))
+          void enqueueGroupWrite(groupId, () =>
+            Promise.all(
+              activeVisitLogs.map((l) => syncDeleteLog(sheetsApiUrl, groupId, l.id))
+            )
           )
             .then(() => {
               setIsSheetsOnline(true);
               markSaveDone('saved');
             })
             .catch(() => {
-              setGroupsData((prev) => ({
-                ...prev,
-                [groupId]: { ...prev[groupId], logs: previousLogs },
-              }));
+              setGroupsData((prev) => {
+                const nextAll = {
+                  ...prev,
+                  [groupId]: {
+                    ...prev[groupId],
+                    logs: [...activeVisitLogs, ...prev[groupId].logs],
+                  },
+                };
+                groupsDataRef.current = nextAll;
+                return nextAll;
+              });
               markSaveDone('error');
               addToast('فشل تحديث حالة الافتقاد في Google Sheets', 'error');
             });
@@ -506,6 +685,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           type: 'visitation',
         };
 
+        groupsDataRef.current = {
+          ...groupsDataRef.current,
+          [groupId]: { ...currentGroup, logs: [newEntry, ...previousLogs] },
+        };
         setGroupsData((prev) => ({
           ...prev,
           [groupId]: {
@@ -517,74 +700,138 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (isValidSheetsUrl(sheetsApiUrl)) {
           setSaveState('saving');
-          void syncToggleLog(sheetsApiUrl, {
-            groupId,
-            memberId,
-            date: visitDate,
-            type: 'visitation',
-            checked: true,
-            timestampUTC,
-            id: entryId,
-          })
+          void enqueueGroupWrite(groupId, () =>
+            syncToggleLog(sheetsApiUrl, {
+              groupId,
+              memberId,
+              date: visitDate,
+              type: 'visitation',
+              checked: true,
+              timestampUTC,
+              id: entryId,
+            })
+          )
             .then(() => {
               setIsSheetsOnline(true);
               markSaveDone('saved');
             })
             .catch(() => {
-              setGroupsData((prev) => ({
-                ...prev,
-                [groupId]: { ...prev[groupId], logs: previousLogs },
-              }));
+              setGroupsData((prev) => {
+                const nextAll = {
+                  ...prev,
+                  [groupId]: {
+                    ...prev[groupId],
+                    logs: prev[groupId].logs.filter((l) => l.id !== entryId),
+                  },
+                };
+                groupsDataRef.current = nextAll;
+                return nextAll;
+              });
               markSaveDone('error');
               addToast('فشل حفظ الافتقاد في Google Sheets — تم التراجع', 'error');
             });
         }
       }
     },
-    [sheetsApiUrl, addToast, markSaveDone]
+    [sheetsApiUrl, addToast, markSaveDone, enqueueGroupWrite]
   );
 
   const addMember = useCallback(
-    (groupId: GroupId, memberInput: Omit<Member, 'id'>) => {
+    (
+      groupId: GroupId,
+      memberInput: Omit<Member, 'id'>,
+      options?: { markPresentOnDate?: string }
+    ): Member => {
+      const cleanPhone = toWesternDigits(memberInput.phone || '').trim();
+      const cleanBirthDate = memberInput.birthDate?.trim()
+        ? normalizeDateKey(memberInput.birthDate)
+        : '';
+
       const newMember: Member = {
         id: generateId(groupId),
         name: memberInput.name.trim(),
-        phone: memberInput.phone.trim(),
-        birthDate: memberInput.birthDate.trim(),
-        address: memberInput.address.trim(),
-        notes: memberInput.notes.trim(),
+        phone: cleanPhone,
+        birthDate: cleanBirthDate,
+        address: (memberInput.address || '').trim(),
+        notes: (memberInput.notes || '').trim(),
+        visitationNotes: (memberInput.visitationNotes || '').trim(),
       };
 
-      const prevMembers = groupsDataRef.current[groupId].members;
+      const markDate = options?.markPresentOnDate
+        ? normalizeDateKey(options.markPresentOnDate)
+        : '';
+      const initialAttendanceLog: LogEntry | null = markDate
+        ? {
+            id: generateId('log'),
+            memberId: newMember.id,
+            date: markDate,
+            timestampUTC: new Date().toISOString(),
+            type: 'attendance',
+          }
+        : null;
+
+      // Synchronously update ref FIRST so immediate checkbox clicks, edits, and counts see the new member right away
+      const currentGrp = groupsDataRef.current[groupId];
+      const nextGroupState: GroupData = {
+        members: [newMember, ...currentGrp.members],
+        logs: initialAttendanceLog
+          ? [initialAttendanceLog, ...currentGrp.logs]
+          : currentGrp.logs,
+      };
+      groupsDataRef.current = {
+        ...groupsDataRef.current,
+        [groupId]: nextGroupState,
+      };
 
       setGroupsData((prev) => ({
         ...prev,
         [groupId]: {
-          ...prev[groupId],
           members: [newMember, ...prev[groupId].members],
+          logs: initialAttendanceLog
+            ? [initialAttendanceLog, ...prev[groupId].logs]
+            : prev[groupId].logs,
         },
       }));
 
-      addToast(`تم إضافة المخدوم "${newMember.name}" بنجاح`, 'success');
+      addToast(
+        initialAttendanceLog
+          ? `تم إضافة "${newMember.name}" وتسجيل حضوره بتاريخ ${markDate} بنجاح`
+          : `تم إضافة المخدوم "${newMember.name}" بنجاح`,
+        'success'
+      );
 
       if (isValidSheetsUrl(sheetsApiUrl)) {
         setSaveState('saving');
-        void syncUpsertMember(sheetsApiUrl, groupId, newMember)
+        void enqueueGroupWrite(groupId, async () => {
+          await syncUpsertMember(sheetsApiUrl, groupId, newMember);
+          if (initialAttendanceLog) {
+            await syncToggleLog(sheetsApiUrl, {
+              groupId,
+              memberId: newMember.id,
+              date: initialAttendanceLog.date,
+              type: 'attendance',
+              checked: true,
+              timestampUTC: initialAttendanceLog.timestampUTC,
+              id: initialAttendanceLog.id,
+            });
+          }
+        })
           .then(() => {
             setIsSheetsOnline(true);
             markSaveDone('saved');
           })
           .catch(() => {
-            setGroupsData((prev) => ({
-              ...prev,
-              [groupId]: { ...prev[groupId], members: prevMembers },
-            }));
             markSaveDone('error');
-            addToast('فشل حفظ المخدوم الجديد في Google Sheets', 'error');
+            addToast(
+              `تم حفظ "${newMember.name}" محلياً، وتعذر المزامنة الفورية مع Google Sheets — اضغط تحديث للمحاولة`,
+              'warning'
+            );
           });
       }
+
+      return newMember;
     },
-    [sheetsApiUrl, addToast, markSaveDone]
+    [sheetsApiUrl, addToast, markSaveDone, enqueueGroupWrite]
   );
 
   const updateMemberField = useCallback(
@@ -645,12 +892,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const executeSync = (memberOverride?: Member) => {
+        // Never sync an edit for a member who has since been permanently deleted
+        if ((deletedMembersRef.current[groupId] || []).includes(memberId)) return;
         const latestMember =
           memberOverride ||
           groupsDataRef.current[groupId].members.find((m) => m.id === memberId);
         if (!latestMember) return;
         setSaveState('saving');
-        void syncUpsertMember(sheetsApiUrl, groupId, latestMember)
+        void enqueueGroupWrite(groupId, () =>
+          syncUpsertMember(sheetsApiUrl, groupId, latestMember)
+        )
           .then(() => {
             setIsSheetsOnline(true);
             markSaveDone('saved');
@@ -668,13 +919,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         executeSync(updatedMember);
       }
     },
-    [sheetsApiUrl, addToast, markSaveDone]
+    [sheetsApiUrl, addToast, markSaveDone, enqueueGroupWrite]
   );
 
   const deleteMember = useCallback(
     (groupId: GroupId, memberId: string) => {
+      // 1. Cancel any pending debounced field edit so it can NEVER resurrect the deleted member in Sheets
+      const timerKey = `${groupId}_${memberId}`;
+      if (debounceTimersRef.current[timerKey]) {
+        clearTimeout(debounceTimersRef.current[timerKey]);
+        delete debounceTimersRef.current[timerKey];
+      }
+
       const prevGroup = groupsDataRef.current[groupId];
       const member = prevGroup.members.find((m) => m.id === memberId);
+
+      // 2. Record permanent tombstone so this member can NEVER come back on refresh or re-seed
+      const existingDeleted = deletedMembersRef.current[groupId] || [];
+      if (!existingDeleted.includes(memberId)) {
+        const nextDeletedMap: DeletedMembersMap = {
+          ...deletedMembersRef.current,
+          [groupId]: [...existingDeleted, memberId],
+        };
+        deletedMembersRef.current = nextDeletedMap;
+        saveDeletedMembers(nextDeletedMap);
+      }
+
+      // 3. Synchronously remove member and ALL their logs from ref & React state immediately
+      const nextGroup: GroupData = {
+        members: prevGroup.members.filter((m) => m.id !== memberId),
+        logs: prevGroup.logs.filter((l) => l.memberId !== memberId),
+      };
+      groupsDataRef.current = {
+        ...groupsDataRef.current,
+        [groupId]: nextGroup,
+      };
 
       setGroupsData((prev) => ({
         ...prev,
@@ -684,26 +963,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
       }));
 
-      addToast(`تم حذف "${member?.name || 'المخدوم'}" من السجل`, 'info');
+      addToast(`تم حذف "${member?.name || 'المخدوم'}" نهائياً من السجل وقاعدة البيانات`, 'info');
 
+      // 4. Permanently purge from Google Sheets via serialized write queue (with 1 automatic retry)
       if (isValidSheetsUrl(sheetsApiUrl)) {
         setSaveState('saving');
-        void syncDeleteMember(sheetsApiUrl, groupId, memberId)
+        void enqueueGroupWrite(groupId, async () => {
+          try {
+            await syncDeleteMember(sheetsApiUrl, groupId, memberId);
+          } catch {
+            // Automatic retry once on transient Apps Script glitch
+            await syncDeleteMember(sheetsApiUrl, groupId, memberId);
+          }
+        })
           .then(() => {
             setIsSheetsOnline(true);
             markSaveDone('saved');
           })
           .catch(() => {
-            setGroupsData((prev) => ({
-              ...prev,
-              [groupId]: prevGroup,
-            }));
             markSaveDone('error');
-            addToast('فشل الحذف من Google Sheets — تم التراجع', 'error');
+            addToast(
+              'تم الحذف نهائياً من الجهاز وسيُستكمل مسحه من Google Sheets تلقائياً عند استقرار الاتصال',
+              'warning'
+            );
           });
       }
     },
-    [sheetsApiUrl, addToast, markSaveDone]
+    [sheetsApiUrl, addToast, markSaveDone, enqueueGroupWrite]
   );
 
   const deleteLog = useCallback(
@@ -799,10 +1085,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (groupId: GroupId, data: GroupData) => {
       const cleanMembers = Array.isArray(data.members)
         ? data.members
+            .map(sanitizeMember)
+            .filter((m): m is Member => m !== null)
         : groupsDataRef.current[groupId].members;
       const cleanLogs = Array.isArray(data.logs)
-        ? data.logs.map((l) => ({ ...l, date: normalizeDateKey(l.date) }))
+        ? data.logs
+            .map(sanitizeLog)
+            .filter((l): l is LogEntry => l !== null)
         : groupsDataRef.current[groupId].logs;
+
+      if (cleanMembers.length === 0 && data.members?.length > 0) {
+        addToast('ملف النسخة الاحتياطية لا يحتوي على سجلات صالحة', 'error');
+        return;
+      }
+
+      groupsDataRef.current = {
+        ...groupsDataRef.current,
+        [groupId]: {
+          members: cleanMembers,
+          logs: cleanLogs,
+        },
+      };
 
       setGroupsData((prev) => ({
         ...prev,
@@ -844,12 +1147,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       setSaveState('saving');
       for (const gid of groupIds) {
-        // Combine extracted seed members with any locally added ones, deduplicating by normalized name
+        // Combine extracted seed members with any locally added ones, excluding permanently deleted members
+        const delSet = new Set(deletedMembersRef.current[gid] || []);
         const localMembers = groupsDataRef.current[gid].members;
         const seen = new Set<string>();
         const combined: Member[] = [];
 
         for (const m of [...seed[gid].members, ...localMembers]) {
+          if (delSet.has(m.id)) continue;
           const key = normalizeArabic(m.name);
           if (!key || seen.has(key)) continue;
           seen.add(key);

@@ -31,6 +31,7 @@ interface MainRecordTabProps {
   searchQuery: string;
   highlightedMemberId?: string | null;
   jumpCounter?: number;
+  onMemberAdded?: (member: Member) => void;
 }
 
 export const MainRecordTab: React.FC<MainRecordTabProps> = ({
@@ -38,6 +39,7 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
   searchQuery,
   highlightedMemberId = null,
   jumpCounter = 0,
+  onMemberAdded,
 }) => {
   const {
     groupsData,
@@ -147,7 +149,7 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
         'إجمالي الحضور': getTotalAttendanceCount(m.id, mLogs),
       };
       for (const el of SPIRITUAL_ELEMENTS) {
-        const reg = calculateElementRegularity(m.id, el.key, mLogs, todayUTC);
+        const reg = calculateElementRegularity(m.id, el.key, mLogs, activeDate);
         row[el.label] = REGULARITY_META[reg.status].label;
       }
       return row;
@@ -246,7 +248,13 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
           <table className="w-full text-right border-collapse min-w-[1160px]">
             <thead className="sticky top-0 z-20 bg-slate-900 text-white shadow-xs">
               <tr>
-                <th className="md:sticky md:right-0 md:z-30 bg-slate-900 px-3 py-2.5 text-xs sm:text-sm font-extrabold border-l border-slate-700 min-w-[180px]">
+                <th
+                  className="md:sticky md:right-0 md:z-30 bg-slate-900 px-1.5 py-2.5 text-[11px] font-extrabold text-center border-l border-slate-700 w-[46px] min-w-[46px]"
+                  title="حذف نهائي من السجل وقاعدة البيانات"
+                >
+                  حذف
+                </th>
+                <th className="md:sticky md:right-[46px] md:z-30 bg-slate-900 px-3 py-2.5 text-xs sm:text-sm font-extrabold border-l border-slate-700 min-w-[190px]">
                   الاسم ({filteredMembers.length})
                 </th>
                 <th className="px-2.5 py-2.5 text-xs sm:text-sm font-extrabold border-l border-slate-700 min-w-[190px]">
@@ -284,7 +292,7 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
             <tbody className="divide-y divide-slate-200">
               {filteredMembers.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="py-10 text-center">
+                  <td colSpan={14} className="py-10 text-center">
                     <p className="text-base font-extrabold text-slate-600">
                       لا توجد نتائج مطابقة للبحث «{searchQuery}»
                     </p>
@@ -297,6 +305,13 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
                   const lastAttendance = getLastAttendanceDate(member.id, mLogs);
                   const totalAttendance = getTotalAttendanceCount(member.id, mLogs);
                   const isHighlighted = highlightedMemberId === member.id;
+                  const stickyCellBg = isHighlighted
+                    ? 'bg-amber-100'
+                    : isPresent
+                    ? 'bg-emerald-50'
+                    : index % 2 === 0
+                    ? 'bg-white'
+                    : 'bg-[#F8FAFC]';
 
                   return (
                     <tr
@@ -312,42 +327,38 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
                           : 'bg-slate-50/50 hover:bg-indigo-50/35'
                       }`}
                     >
+                      {/* 0. زر الحذف النهائي (خارج مربع الاسم على يمين الأسماء) */}
+                      <td
+                        className={`md:sticky md:right-0 md:z-10 px-1.5 py-2 border-l border-slate-200 text-center w-[46px] min-w-[46px] ${stickyCellBg}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setMemberToDelete(member)}
+                          className="mx-auto inline-flex items-center justify-center p-1.5 rounded-lg text-rose-500 bg-rose-50/80 hover:bg-rose-600 hover:text-white border border-rose-200/80 hover:border-rose-600 transition-colors cursor-pointer"
+                          title="حذف نهائي من السجل وقاعدة البيانات"
+                          aria-label={`حذف نهائي ${member.name}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+
                       {/* 1. الاسم */}
                       <td
-                        className={`md:sticky md:right-0 md:z-10 px-2.5 py-2 border-l border-slate-200 md:shadow-[-4px_0_8px_-4px_rgba(15,23,42,0.08)] ${
-                          isHighlighted
-                            ? 'bg-amber-100'
-                            : isPresent
-                            ? 'bg-emerald-50'
-                            : index % 2 === 0
-                            ? 'bg-white'
-                            : 'bg-[#F8FAFC]'
-                        }`}
+                        className={`md:sticky md:right-[46px] md:z-10 px-2.5 py-2 border-l border-slate-200 md:shadow-[-4px_0_8px_-4px_rgba(15,23,42,0.08)] ${stickyCellBg}`}
                       >
-                        <div className="flex items-center justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="w-6 h-6 rounded-md bg-slate-200/80 text-slate-700 text-[11px] font-extrabold font-mono-num flex items-center justify-center shrink-0">
-                              {index + 1}
-                            </span>
-                            <input
-                              type="text"
-                              value={member.name}
-                              onChange={(e) =>
-                                updateMemberField(groupId, member.id, { name: e.target.value })
-                              }
-                              aria-label={`اسم المخدوم ${member.name}`}
-                              className="w-full min-w-[115px] bg-transparent hover:bg-white focus:bg-white px-1.5 py-1 rounded-md border border-transparent hover:border-slate-300 focus:border-indigo-500 font-extrabold text-sm text-slate-900 transition-colors"
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setMemberToDelete(member)}
-                            className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors shrink-0 cursor-pointer"
-                            title="حذف المخدوم"
-                            aria-label={`حذف ${member.name}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="w-6 h-6 rounded-md bg-slate-200/80 text-slate-700 text-[11px] font-extrabold font-mono-num flex items-center justify-center shrink-0">
+                            {index + 1}
+                          </span>
+                          <input
+                            type="text"
+                            value={member.name}
+                            onChange={(e) =>
+                              updateMemberField(groupId, member.id, { name: e.target.value })
+                            }
+                            aria-label={`اسم المخدوم ${member.name}`}
+                            className="w-full min-w-[130px] bg-transparent hover:bg-white focus:bg-white px-1.5 py-1 rounded-md border border-transparent hover:border-slate-300 focus:border-indigo-500 font-extrabold text-sm text-slate-900 transition-colors"
+                          />
                         </div>
                       </td>
 
@@ -462,7 +473,7 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
                           member.id,
                           el.key as SpiritualElement,
                           mLogs,
-                          todayUTC
+                          activeDate
                         );
                         const regMeta = REGULARITY_META[reg.status];
 
@@ -515,15 +526,19 @@ export const MainRecordTab: React.FC<MainRecordTabProps> = ({
       <AddMemberModal
         isOpen={isAddOpen}
         groupTitle={groupConfig.workspaceTitle}
-        onAdd={(m) => addMember(groupId, m)}
+        activeDate={activeDate}
+        onAdd={(m, opts) => {
+          const created = addMember(groupId, m, opts);
+          onMemberAdded?.(created);
+        }}
         onClose={() => setIsAddOpen(false)}
       />
 
       <ConfirmModal
         isOpen={!!memberToDelete}
-        title="تأكيد حذف المخدوم"
-        message={`هل أنت متأكد من حذف "${memberToDelete?.name}" وجميع سجلات حضوره من هذا السجل؟ لا يمكن التراجع عن هذا الإجراء.`}
-        confirmLabel="نعم، احذف المخدوم"
+        title="تأكيد الحذف النهائي للمخدوم"
+        message={`هل أنت متأكد من الحذف النهائي للمخدوم «${memberToDelete?.name}» وجميع سجلات حضوره ومتابعته؟ سيتم مسح اسمه تماماً من السجل ومن قاعدة البيانات (Google Sheets) بدون رجعة.`}
+        confirmLabel="نعم، احذف نهائياً"
         onConfirm={() => {
           if (memberToDelete) {
             deleteMember(groupId, memberToDelete.id);

@@ -68,20 +68,6 @@ export default defineConfig(() => {
               }
             }
           }
-
-          const publicAistudio = path.resolve(__dirname, 'public/assets/aistudio');
-          const rootAistudio = path.resolve(__dirname, 'assets/aistudio');
-          if (fs.existsSync(publicAistudio)) {
-            fs.mkdirSync(rootAistudio, {recursive: true});
-            for (const file of fs.readdirSync(publicAistudio)) {
-              if (/\.(png|jpe?g|webp|svg)$/i.test(file)) {
-                fs.copyFileSync(
-                  path.join(publicAistudio, file),
-                  path.join(rootAistudio, file)
-                );
-              }
-            }
-          }
         },
       },
     ],
